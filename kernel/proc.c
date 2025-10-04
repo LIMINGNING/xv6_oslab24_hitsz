@@ -267,10 +267,13 @@ int fork(void) {
   return pid;
 }
 
+static char *states[] = {"unused", "sleeping", "runnable", "running", "zombie"};
+
 // Pass p's abandoned children to init.
 // Caller must hold p->lock.
 void reparent(struct proc *p) {
   struct proc *pp;
+  int child_num = 0;
 
   for (pp = proc; pp < &proc[NPROC]; pp++) {
     // this code uses pp->parent without holding pp->lock.
@@ -281,6 +284,9 @@ void reparent(struct proc *p) {
       // pp->parent can't change between the check and the acquire()
       // because only the parent changes it, and we're the parent.
       acquire(&pp->lock);
+      printf("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, child_num, pp->pid, pp->name,
+             states[pp->state]);
+      child_num++;
       pp->parent = initproc;
       // we should wake up init here, but that would require
       // initproc->lock, which would be a deadlock, since we hold
@@ -332,6 +338,9 @@ void exit(int status) {
   struct proc *original_parent = p->parent;
   release(&p->lock);
 
+  printf("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name,
+         states[original_parent->state]);
+
   // we need the parent's lock in order to wake it up from wait().
   // the parent-then-child rule says we have to lock it first.
   acquire(&original_parent->lock);
@@ -356,7 +365,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -396,6 +405,12 @@ int wait(uint64 addr) {
 
     // No point waiting if we don't have any children.
     if (!havekids || p->killed) {
+      release(&p->lock);
+      return -1;
+    }
+
+    // If non-blocking (flags=1), don't wait - return immediately if no zombie children
+    if (flags == 1) {
       release(&p->lock);
       return -1;
     }
@@ -472,6 +487,28 @@ void sched(void) {
 void yield(void) {
   struct proc *p = myproc();
   acquire(&p->lock);
+
+  // 打印上下文保存的地址范围
+  printf("Save the context of the process to the memory region from address %p to %p\n", &p->context,
+         (char *)&p->context + sizeof(struct context));
+
+  // 打印当前进程信息
+  printf("Current running process pid is %d and user pc is %p\n", p->pid, (void *)p->trapframe->epc);
+
+  // 参考调度器的实现方式，找到下一个RUNNABLE的进程
+  struct proc *next = 0;
+  // 从进程表的开头开始查找第一个RUNNABLE的进程（除了当前进程）
+  for (struct proc *np = proc; np < &proc[NPROC]; np++) {
+    if (np != p && np->state == RUNNABLE) {
+      next = np;
+      break;
+    }
+  }
+
+  if (next) {
+    printf("Next runnable process pid is %d and user pc is %p\n", next->pid, (void *)next->trapframe->epc);
+  }
+
   p->state = RUNNABLE;
   sched();
   release(&p->lock);
