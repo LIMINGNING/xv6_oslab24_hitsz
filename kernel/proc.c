@@ -284,7 +284,7 @@ void reparent(struct proc *p) {
       // pp->parent can't change between the check and the acquire()
       // because only the parent changes it, and we're the parent.
       acquire(&pp->lock);
-      printf("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, child_num, pp->pid, pp->name,
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, child_num, pp->pid, pp->name,
              states[pp->state]);
       child_num++;
       pp->parent = initproc;
@@ -338,7 +338,7 @@ void exit(int status) {
   struct proc *original_parent = p->parent;
   release(&p->lock);
 
-  printf("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name,
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name,
          states[original_parent->state]);
 
   // we need the parent's lock in order to wake it up from wait().
