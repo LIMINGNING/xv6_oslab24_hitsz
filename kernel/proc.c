@@ -29,12 +29,14 @@ void procinit(void) {
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
 
-    // Allocate a page for the process's kernel stack.
-    // Map it high in memory, followed by an invalid
-    // guard page.
+    // 为进程的内核栈分配物理页
+    // 映射到高地址，后面跟一个无效的保护页
     char *pa = kalloc();
     if (pa == 0) panic("kalloc");
     uint64 va = KSTACK((int)(p - proc));
+    // 保存内核栈的物理地址到PCB中
+    p->kstack_pa = (uint64)pa;
+    // 保留在全局内核页表中的映射
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     p->kstack = va;
   }
@@ -111,6 +113,22 @@ found:
     return 0;
   }
 
+  // 创建进程的内核页表
+  p->k_pagetable = kvminit_new();
+  if(p->k_pagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 将内核栈映射到进程的内核页表中
+  // 使用procinit中保存的物理地址
+  if(mappages(p->k_pagetable, p->kstack, PGSIZE, p->kstack_pa, PTE_R | PTE_W) != 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -128,6 +146,9 @@ static void freeproc(struct proc *p) {
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  // 释放进程的内核页表（不释放叶子物理页）
+  if (p->k_pagetable) kvmfree(p->k_pagetable);
+  p->k_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -430,7 +451,15 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        
+        // 切换到进程的内核页表
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
+        
         swtch(&c->context, &p->context);
+
+        // 切换回全局内核页表
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

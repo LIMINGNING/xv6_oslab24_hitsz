@@ -28,6 +28,7 @@ void            consputc(int);
 
 // exec.c
 int             exec(char*, char**);
+void            vmprint(pagetable_t);
 
 // file.c
 struct file*    filealloc(void);
@@ -159,6 +160,8 @@ int             uartgetc(void);
 
 // vm.c
 void            kvminit(void);
+pagetable_t     kvminit_new(void);
+void            kvmfree(pagetable_t);
 void            kvminithart(void);
 uint64          kvmpa(uint64);
 void            kvmmap(uint64, uint64, uint64, int);

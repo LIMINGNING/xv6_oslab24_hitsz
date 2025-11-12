@@ -8,6 +8,7 @@
 #include "elf.h"
 
 static int loadseg(pde_t *pgdir, uint64 addr, struct inode *ip, uint offset, uint sz);
+static void vmprint_walk(pagetable_t pagetable, int level, uint64 va_base, int depth);
 
 int exec(char *path, char **argv) {
   char *s, *last;
@@ -97,6 +98,8 @@ int exec(char *path, char **argv) {
   p->trapframe->sp = sp;          // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  if (p->pid == 1) vmprint(p->pagetable);
+
   return argc;  // this ends up in a0, the first argument to main(argc, argv)
 
 bad:
@@ -106,6 +109,56 @@ bad:
     end_op();
   }
   return -1;
+}
+
+void vmprint(pagetable_t pgtbl) {
+  // 打印页表的物理地址
+  printf("page table %p\n", pgtbl);
+  // 从根页表开始遍历，level=2表示根级，va_base=0表示虚拟地址从0开始，depth=0表示层级深度为0
+  vmprint_walk(pgtbl, 2, 0, 0);
+}
+
+// 递归遍历页表并打印页表项的函数
+// level: 当前页表层级 (2=根级, 1=中级, 0=叶子级)
+// va_base: 当前层级的虚拟地址基址
+// depth: 递归深度，用于格式化输出 (0=根级, 1=第一级子页表, 等等)
+static void vmprint_walk(pagetable_t pagetable, int level, uint64 va_base, int depth) {
+  // 遍历当前页表的512个页表项
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if (!(pte & PTE_V)) continue; // 跳过无效的页表项
+    
+    // 构建前缀字符串，显示正确数量的 ||
+    printf("||");
+    for (int d = 0; d < depth; d++) {
+      printf("   ||");
+    }
+    
+    // 提取物理地址并构建权限标志字符串
+    uint64 pa = PTE2PA(pte);
+    char flags[5];
+    flags[0] = (pte & PTE_R) ? 'r' : '-';  // 读权限
+    flags[1] = (pte & PTE_W) ? 'w' : '-';  // 写权限
+    flags[2] = (pte & PTE_X) ? 'x' : '-';  // 执行权限
+    flags[3] = (pte & PTE_U) ? 'u' : '-';  // 用户态权限
+    flags[4] = '\0';
+    
+    // 检查这是否是叶子节点（设置了R、W或X位）
+    if (pte & (PTE_R | PTE_W | PTE_X)) {
+      // 这是叶子节点 - 打印虚拟地址到物理地址的映射
+      uint64 va = va_base + ((uint64)i << (12 + level * 9));
+      printf("idx: %d: va: %p -> pa: %p, flags: %s\n", i, va, pa, flags);
+    } else {
+      // 这是非叶子节点 - 只打印物理地址
+      printf("idx: %d: pa: %p, flags: %s\n", i, pa, flags);
+      
+      // 如果不是叶子级别，递归到下一级
+      if (level > 0) {
+        uint64 child_va_base = va_base + ((uint64)i << (12 + level * 9));
+        vmprint_walk((pagetable_t)pa, level - 1, child_va_base, depth + 1);
+      }
+    }
+  }
 }
 
 // Load a program segment into pagetable at virtual address va.

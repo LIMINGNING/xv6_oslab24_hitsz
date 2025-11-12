@@ -45,6 +45,44 @@ void kvminit() {
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+// 向指定页表添加映射的辅助函数
+static void kvmmap_to(pagetable_t kpagetable, uint64 va, uint64 pa, uint64 sz, int perm) {
+  if(mappages(kpagetable, va, sz, pa, perm) != 0)
+    panic("kvmmap_to");
+}
+
+/*
+ * 为进程创建一个独立的内核页表，不包含CLINT映射
+ */
+pagetable_t kvminit_new() {
+  pagetable_t kpagetable = (pagetable_t)kalloc();
+  if(kpagetable == 0) return 0;
+  memset(kpagetable, 0, PGSIZE);
+
+  // uart registers
+  kvmmap_to(kpagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface  
+  kvmmap_to(kpagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // 注意：不映射CLINT，避免地址重合问题
+
+  // PLIC
+  kvmmap_to(kpagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  kvmmap_to(kpagetable, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  kvmmap_to(kpagetable, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  kvmmap_to(kpagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kpagetable;
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void kvminithart() {
@@ -240,6 +278,26 @@ void freewalk(pagetable_t pagetable) {
       panic("freewalk: leaf");
     }
   }
+  kfree((void *)pagetable);
+}
+
+// 递归释放内核页表，但不释放叶子页表指向的物理页帧
+// 因为内核代码和数据是共享的
+void kvmfree(pagetable_t pagetable) {
+  // 遍历512个页表项
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      // 这是指向下一级页表的页表项
+      uint64 child = PTE2PA(pte);
+      kvmfree((pagetable_t)child);
+      pagetable[i] = 0;
+    } else if (pte & PTE_V) {
+      // 这是叶子页表项，清除它但不释放物理页
+      pagetable[i] = 0;
+    }
+  }
+  // 释放页表本身占用的页面
   kfree((void *)pagetable);
 }
 
